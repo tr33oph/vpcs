@@ -32,6 +32,7 @@
 #include <string.h>
 #include <errno.h>
 #include <pthread.h>
+#include <ctype.h>
 
 #ifdef cygwin
 #include <windows.h>
@@ -87,9 +88,11 @@ int num_pths = MAX_NUM_PTHS;  /* number of VPCs */
 
 char *tapname = "tap0";  /* TAP device name (only when 1 VPC is created) */
 
-int macaddr = 0; /* the last byte of ether address */
+char macaddr = 0; /* the last byte of ether address */
+char *macaddr_full = NULL;
+int mac_int_full[6];
 
-
+int valid_mac(char *mac);
 static void *pth_reader(void *devid);
 static void *pth_output(void *devid);
 static void *pth_writer(void *devid);
@@ -161,7 +164,7 @@ int main(int argc, char **argv)
 	rhost = inet_addr("127.0.0.1");
 	
 	devtype = DEV_UDP;		
-	while ((c = getopt(argc, argv, "?c:efhm:p:r:Rs:t:uvFi:d:")) != -1) {
+	while ((c = getopt(argc, argv, "?c:efhm:p:r:Rs:t:uvFi:d:M:")) != -1) {
 		switch (c) {
 			case 'c':
 				rport_flag = 1;
@@ -175,6 +178,9 @@ int main(int argc, char **argv)
 				break;
 			case 'm':
 				macaddr = arg2int(optarg, 0, 240, 0);
+				break;
+			case 'M':
+				macaddr_full = strdup(optarg);
 				break;
 			case 'p':
 				daemon_port = arg2int(optarg, 1024, 65000, 5000);
@@ -227,6 +233,20 @@ int main(int argc, char **argv)
 			usage();
 			exit(0);
 		}
+	}
+
+	if (macaddr_full == NULL) {
+        fprintf(stderr, "Usage: %s -M Full MAC Address.\n", argv[0]);
+    }else{
+		if (!valid_mac(macaddr_full)) {
+			printf("Error MAC");
+			exit(EXIT_FAILURE);
+		}
+
+		sscanf(macaddr_full, "%x:%x:%x:%x:%x:%x",
+			&mac_int_full[0], &mac_int_full[1], &mac_int_full[2], 
+			&mac_int_full[3], &mac_int_full[4], &mac_int_full[5]);
+
 	}
 
 	if (daemon_port && daemonize(daemon_port, daemon_bg))
@@ -293,6 +313,25 @@ int main(int argc, char **argv)
 		}
 	}
 	return 0;
+}
+
+int valid_mac(char *mac) {
+    int i;
+    int count = 0;
+
+    // 验证MAC地址的格式
+    for (i = 0; i < strlen(mac); i++) {
+        if (mac[i] == ':') {
+            count++;
+        } else if (!isxdigit(mac[i])) {
+            return 0;
+        }
+    }
+    if (count != 5) {
+        return 0;
+    }
+
+    return 1;
 }
 
 void parse_cmd(char *cmdstr)
@@ -438,12 +477,22 @@ void *pth_reader(void *devid)
 	pc->lport = lport + id;
 	pc->rport = rport + id;
 	
-	pc->ip4.mac[0] = 0x00;
-	pc->ip4.mac[1] = 0x50;
-	pc->ip4.mac[2] = 0x79;
-	pc->ip4.mac[3] = 0x66;
-	pc->ip4.mac[4] = 0x68;
-	pc->ip4.mac[5] = (id + macaddr) & 0xff;
+	if( macaddr_full == NULL){
+		pc->ip4.mac[0] = 0x00;
+		pc->ip4.mac[1] = 0x50;
+		pc->ip4.mac[2] = 0x79;
+		pc->ip4.mac[3] = 0x66;
+		pc->ip4.mac[4] = 0x68;
+		pc->ip4.mac[5] = (id + macaddr) & 0xff;
+	}else{
+		pc->ip4.mac[0] = mac_int_full[0] & 0xff;
+		pc->ip4.mac[1] = mac_int_full[1] & 0xff;
+		pc->ip4.mac[2] = mac_int_full[2] & 0xff;
+		pc->ip4.mac[3] = mac_int_full[3] & 0xff;
+		pc->ip4.mac[4] = mac_int_full[4] & 0xff;
+		pc->ip4.mac[5] = (id + mac_int_full[5]) & 0xff;
+	}
+
 	pc->ip4.flags |= IPF_FRAG;
 	pc->mtu = 1500;
 	
@@ -716,6 +765,7 @@ void usage()
 		"  {H-i} {Unum}         number of vpc instances to start (default is 9)\r\n"
 		"  {H-p} {Uport}        run as a daemon listening on the tcp {Uport}\r\n"
 		"  {H-m} {Unum}         start byte of ether address, default from 0\r\n"
+		"  {H-M} {Ufullmac}         full MAC address\r\n"
 		"  [{H-r}] {UFILENAME}  load and execute script file {HFILENAME}\r\n"
 		"\r\n"
 		"  {H-e}             tap mode, using /dev/tapx by default (linux only)\r\n"
